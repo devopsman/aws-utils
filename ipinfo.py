@@ -267,6 +267,48 @@ def get_app_elb_info(ipaddr, region, config):
     return alb_info
 
 
+def get_nlb_info(ipaddr, region, config):
+    nlb_info = {}
+    nlb_found = False
+    try:
+        client = boto3.client('elbv2', region_name=region, config=config)
+        marker = 'empty'
+        while(marker != 'finished'):
+            if marker == 'empty':
+                response = client.describe_load_balancers(PageSize=1)
+            else:
+                response = client.describe_load_balancers(PageSize=1, Marker=marker)
+            if 'NextMarker' in response.keys():
+                marker = response['NextMarker']
+            else:
+                marker = 'finished'
+            bals = response['LoadBalancers']
+            for nlb in bals:
+                scale_factor = len(nlb['AvailabilityZones'])
+                for i in range(scale_factor):
+                    if get_ip_by_endpoint(nlb['DNSName']) == ipaddr:
+                        nlb_info['Service'] = "Amazon NLB"
+                        nlb_info['LoadBalancerName'] = nlb['LoadBalancerName']
+                        nlb_info['LoadBalancerArn'] = nlb['LoadBalancerArn']
+                        nlb_info['IpAddressType'] = nlb['IpAddressType']
+                        nlb_info['DNSName'] = nlb['DNSName']
+                        nlb_info['Type'] = nlb['Type']
+                        nlb_info['Scheme'] = nlb['Scheme']
+                        nlb_info['State'] = nlb['State']['Code']
+                        nlb_info['VpcId'] = nlb['VpcId']
+                        nlb_info['AvailabilityZones'] = nlb['AvailabilityZones']
+                        nlb_found = True
+                        break
+                if nlb_found:
+                    break
+            if nlb_found:
+                break
+    except Exception as error:
+        print(error)
+    return nlb_info
+
+
+
 if __name__ == '__main__':
     config = Config (
         retries = dict (
@@ -336,11 +378,16 @@ if __name__ == '__main__':
             if not ip_info:
                 print("Could not find additional details among ELB/ALB balancers. Probably IP address was changed.")
                 sys.exit()
-        elif ipinfo[0]['Attachment']['InstanceId'].startswith('i-'):
-            print("IP address %s comes from Amazon EC2. Looking for detailed info..." % ip)
+        elif (ipinfo[0]['Attachment']['InstanceOwnerId'] == 'amazon-aws') and ('InterfaceType' in ipinfo[0] and (ipinfo[0]['InterfaceType'] == 'network_load_balancer')):
+            print("IP address %s comes from Amazon NLB. Looking for detailed info..." % ip)
             spinner.start()
-            ip_info = get_ec2_info(ip, region, config)
+            ip_info = get_nlb_info(ip, region, config)
             spinner.stop()
+        elif ('InstanceId' in ipinfo[0]['Attachment']) and (ipinfo[0]['Attachment']['InstanceId'].startswith('i-')):
+                print("IP address %s comes from Amazon EC2. Looking for detailed info..." % ip)
+                spinner.start()
+                ip_info = get_ec2_info(ip, region, config)
+                spinner.stop()
         else:
             print("Could not find additional details or IP comes from unknown service")
             sys.exit()
